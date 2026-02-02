@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Scanner Hilti (9 chiffres)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 0; background:#0b0f17; color:#e9eef7; }
+    header { padding:14px 16px; border-bottom:1px solid #1c2333; }
+    h1 { font-size:16px; margin:0; opacity:.95; }
+    main { padding:16px; display:grid; gap:12px; }
+    .card { background:#111a2b; border:1px solid #1c2333; border-radius:14px; padding:12px; }
+    video { width:100%; border-radius:12px; background:#000; aspect-ratio: 3/4; object-fit: cover; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; }
+    button, a.btn {
+      appearance:none; border:0; border-radius:12px; padding:12px 14px;
+      background:#2d6cdf; color:#fff; font-weight:700; text-decoration:none; display:inline-flex; align-items:center; gap:8px;
+    }
+    button.secondary { background:#22304a; }
+    .result { font-size:28px; letter-spacing:1px; font-weight:800; }
+    .hint { opacity:.85; font-size:13px; line-height:1.35; }
+    .ok { color:#7CFF9E; font-weight:700; }
+    .warn { color:#ffd27c; font-weight:700; }
+    input { width:100%; padding:10px 12px; border-radius:10px; border:1px solid #2a3550; background:#0b0f17; color:#e9eef7; font-size:16px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Scanner Hilti → extrait uniquement les 9 chiffres</h1>
+  </header>
+
+  <main>
+    <div class="card">
+      <div class="hint">
+        ✅ Scanne le code (QR/DataMatrix) → on sort <b>ex: 454844738</b><br/>
+        <span class="warn">iPhone :</span> si la caméra ne s’ouvre pas dans Glide, ouvre ce scanner dans Safari (pas dans une webview).
+      </div>
+    </div>
+
+    <div class="card">
+      <video id="video" playsinline></video>
+      <div class="row" style="margin-top:10px;">
+        <button id="start">Démarrer</button>
+        <button id="stop" class="secondary" disabled>Stop</button>
+        <button id="copy" class="secondary" disabled>Copier</button>
+        <a id="back" class="btn secondary" href="#" style="opacity:.9;">Retour</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="hint">Résultat (9 chiffres) :</div>
+      <div id="out" class="result">—</div>
+      <div class="hint" style="margin-top:8px;">Ou colle/édite ici :</div>
+      <input id="manual" placeholder="454844738" inputmode="numeric" />
+      <div class="hint" style="margin-top:8px;">
+        Si le code lu contient d’autres infos, on garde automatiquement le <span class="ok">premier bloc de 9 chiffres</span>.
+      </div>
+    </div>
+  </main>
+
+  <script type="module">
+    import { BrowserMultiFormatReader } from "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.2/esm/index.min.js";
+
+    const video = document.getElementById("video");
+    const out = document.getElementById("out");
+    const manual = document.getElementById("manual");
+    const btnStart = document.getElementById("start");
+    const btnStop  = document.getElementById("stop");
+    const btnCopy  = document.getElementById("copy");
+    const btnBack  = document.getElementById("back");
+
+    const params = new URLSearchParams(location.search);
+    const returnUrl = params.get("return") || "";
+    btnBack.href = returnUrl || "javascript:history.back()";
+
+    const reader = new BrowserMultiFormatReader();
+    let active = false;
+
+    function extract9Digits(text) {
+      if (!text) return "";
+      // normalise : on cherche des blocs de chiffres (avec espaces / tirets)
+      const candidates = (text.match(/\d[\d\s-]{7,}\d/g) || [])
+        .map(s => s.replace(/[^\d]/g, ""));
+      // prend le premier EXACTEMENT 9 chiffres, sinon le premier >= 9
+      let pick = candidates.find(x => x.length === 9) || candidates.find(x => x.length >= 9) || "";
+      if (pick.length > 9) pick = pick.slice(0, 9);
+      return pick;
+    }
+
+    function setResult(rawText) {
+      const code = extract9Digits(rawText) || extract9Digits(manual.value) || "";
+      if (!code) return;
+
+      out.textContent = code;
+      manual.value = code;
+      btnCopy.disabled = false;
+
+      // petit feedback
+      if (navigator.vibrate) navigator.vibrate(80);
+      // stop auto pour éviter double lecture
+      stop();
+    }
+
+    async function start() {
+      if (active) return;
+      active = true;
+
+      btnStart.disabled = true;
+      btnStop.disabled = false;
+      out.textContent = "…";
+
+      const devices = await reader.listVideoInputDevices();
+      // essaie de prendre la caméra arrière (souvent la dernière / ou label contenant "back")
+      const back = devices.find(d => /back|rear|environment/i.test(d.label));
+      const deviceId = (back || devices[devices.length - 1] || {}).deviceId;
+
+      reader.decodeFromVideoDevice(deviceId, video, (result, err) => {
+        if (result?.getText) {
+          setResult(result.getText());
+        }
+      });
+    }
+
+    function stop() {
+      if (!active) return;
+      active = false;
+      reader.reset();
+      btnStart.disabled = false;
+      btnStop.disabled = true;
+    }
+
+    async function copy() {
+      const code = manual.value.trim();
+      if (!code) return;
+      try {
+        await navigator.clipboard.writeText(code);
+        out.textContent = code + "  ✅";
+      } catch(e) {
+        // fallback: sélection manuelle
+        manual.focus();
+        manual.select();
+        out.textContent = code + "  (sélectionné)";
+      }
+      // retour auto si return= fourni
+      if (returnUrl) setTimeout(() => location.href = returnUrl, 250);
+    }
+
+    btnStart.addEventListener("click", start);
+    btnStop.addEventListener("click", stop);
+    btnCopy.addEventListener("click", copy);
+    manual.addEventListener("input", () => setResult(manual.value));
+  </script>
+</body>
+</html>
