@@ -12,12 +12,12 @@
     body{ margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial; background:var(--bg); color:var(--txt); }
     header{ padding:14px 16px; border-bottom:1px solid var(--line); }
     h1{ margin:0; font-size:16px; opacity:.95; }
-    main{ padding:16px; display:grid; gap:12px; max-width:620px; margin:0 auto; }
+    main{ padding:16px; display:grid; gap:12px; max-width:720px; margin:0 auto; }
     .card{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:12px; }
     .hint{ color:var(--muted); font-size:13px; line-height:1.35; }
-    .ok{ color:var(--ok); font-weight:700; }
-    .warn{ color:var(--warn); font-weight:700; }
-    .err{ color:var(--err); font-weight:700; white-space:pre-wrap; }
+    .ok{ color:var(--ok); font-weight:800; }
+    .warn{ color:var(--warn); font-weight:800; }
+    .err{ color:var(--err); font-weight:800; white-space:pre-wrap; }
     video{
       width:100%;
       border-radius:12px;
@@ -28,7 +28,7 @@
     .row{ display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; }
     button, a.btn{
       appearance:none; border:0; border-radius:12px; padding:12px 14px;
-      background:var(--btn); color:#fff; font-weight:800; text-decoration:none;
+      background:var(--btn); color:#fff; font-weight:900; text-decoration:none;
       display:inline-flex; align-items:center; gap:8px; cursor:pointer;
     }
     button.secondary, a.btn.secondary{ background:var(--btn2); color:var(--txt); }
@@ -39,7 +39,7 @@
       border:1px solid #2a3550; background:var(--bg); color:var(--txt);
       font-size:16px;
     }
-    details{ margin-top:8px; }
+    details{ margin-top:10px; }
     summary{ cursor:pointer; color:var(--muted); }
     pre{ background:#0a0d13; border:1px solid #1f2a40; padding:10px; border-radius:10px; overflow:auto; }
   </style>
@@ -52,27 +52,30 @@
   <main>
     <div class="card">
       <div class="hint">
-        1) Clique <b>Démarrer</b> → autorise la caméra<br/>
-        2) Vise le <b>DataMatrix/QR</b> ou la ligne de chiffres<br/>
+        1) <b>Démarrer caméra</b> (obligatoire sur iPhone)<br/>
+        2) Si flux OK mais pas de lecture, clique <b>Scanner</b><br/>
         3) On récupère le <span class="ok">premier bloc de 9 chiffres</span> puis <b>Copier</b><br/>
-        <span class="warn">Astuce iPhone :</span> ça marche dans Safari (pas dans un navigateur intégré).
+        <span class="warn">Astuce :</span> vise le code (DataMatrix) ou la ligne de chiffres.
       </div>
       <div id="error" class="err" style="margin-top:10px;"></div>
     </div>
 
     <div class="card">
-      <video id="video" autoplay playsinline muted></video>
+      <video id="video" playsinline muted></video>
 
       <div class="row">
-        <button id="start">Démarrer</button>
-        <button id="stop" class="secondary" disabled>Stop</button>
-        <button id="copy" class="secondary" disabled>Copier</button>
+        <button id="btnCam">Démarrer caméra</button>
+        <button id="btnSwitch" class="secondary" disabled>Basculer caméra</button>
+        <button id="btnScan" class="secondary" disabled>Scanner</button>
+        <button id="btnStop" class="secondary" disabled>Stop</button>
+        <button id="btnCopy" class="secondary" disabled>Copier</button>
         <a id="back" class="btn secondary" href="#">Retour</a>
       </div>
 
       <details>
-        <summary>Debug (texte brut lu)</summary>
-        <pre id="raw">—</pre>
+        <summary>Debug</summary>
+        <pre id="dbg">—</pre>
+        <pre id="raw">Texte brut : —</pre>
       </details>
     </div>
 
@@ -80,12 +83,8 @@
       <div class="hint">Résultat (9 chiffres) :</div>
       <div id="out" class="result">—</div>
 
-      <div class="hint" style="margin-top:10px;">Ou colle/édite ici (si besoin) :</div>
+      <div class="hint" style="margin-top:10px;">Ou colle/édite ici :</div>
       <input id="manual" placeholder="454844738" inputmode="numeric" autocomplete="off" />
-
-      <div class="hint" style="margin-top:10px;">
-        Si le code lu contient d’autres infos, on garde automatiquement le <span class="ok">premier groupe de 9 chiffres</span>.
-      </div>
     </div>
   </main>
 
@@ -95,21 +94,27 @@
     const video   = document.getElementById("video");
     const out     = document.getElementById("out");
     const rawBox  = document.getElementById("raw");
+    const dbgBox  = document.getElementById("dbg");
     const manual  = document.getElementById("manual");
     const errBox  = document.getElementById("error");
 
-    const btnStart = document.getElementById("start");
-    const btnStop  = document.getElementById("stop");
-    const btnCopy  = document.getElementById("copy");
+    const btnCam   = document.getElementById("btnCam");
+    const btnScan  = document.getElementById("btnScan");
+    const btnStop  = document.getElementById("btnStop");
+    const btnCopy  = document.getElementById("btnCopy");
+    const btnSwitch= document.getElementById("btnSwitch");
     const btnBack  = document.getElementById("back");
 
     const params = new URLSearchParams(location.search);
     const returnUrl = params.get("return") || "";
     btnBack.href = returnUrl || "javascript:history.back()";
 
+    let stream = null;
+    let devices = [];
+    let currentDeviceIndex = -1;
+    let scanning = false;
+
     const reader = new BrowserMultiFormatReader();
-    let active = false;
-    let lastCode = "";
 
     function showError(e) {
       console.error(e);
@@ -117,20 +122,16 @@
       const msg  = e?.message || String(e);
       errBox.textContent = `${name}: ${msg}`;
     }
+    function clearError(){ errBox.textContent = ""; }
 
-    function clearError() {
-      errBox.textContent = "";
-    }
-
-    // Extrait le 1er code de 9 chiffres trouvé.
     function extract9Digits(text) {
       if (!text) return "";
 
-      // 1) direct : un bloc exact de 9 chiffres
+      // bloc exact de 9 chiffres
       const m1 = String(text).match(/\d{9}/);
       if (m1 && m1[0]) return m1[0];
 
-      // 2) groupements possibles : "454 844 738" ou "454-844-738"
+      // groupements type 454 844 738 / 454-844-738
       const m2 = String(text).match(/\d[\d\s-]{7,}\d/g);
       if (m2 && m2.length) {
         for (const chunk of m2) {
@@ -140,88 +141,160 @@
         }
       }
 
-      // 3) fallback : garde tous les chiffres, prends les 9 premiers si possible
-      const digitsAll = String(text).replace(/\D/g, "");
-      if (digitsAll.length === 9) return digitsAll;
-      if (digitsAll.length > 9) return digitsAll.slice(0, 9);
-
+      // fallback : tous chiffres, 9 premiers
+      const all = String(text).replace(/\D/g, "");
+      if (all.length === 9) return all;
+      if (all.length > 9) return all.slice(0, 9);
       return "";
     }
 
-    function setResult(rawText) {
-      rawBox.textContent = rawText || "—";
-      const code = extract9Digits(rawText) || extract9Digits(manual.value) || "";
+    function updateDebug(extra="") {
+      const s = stream?.getVideoTracks?.()?.[0]?.getSettings?.() || {};
+      dbgBox.textContent =
+        `video.readyState=${video.readyState}\n` +
+        `videoWidth=${video.videoWidth} videoHeight=${video.videoHeight}\n` +
+        `trackSettings=${JSON.stringify(s, null, 2)}\n` +
+        (extra ? `\n${extra}` : "");
+    }
 
+    async function stopAll() {
+      try { reader.reset(); } catch {}
+      scanning = false;
+
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
+      }
+      video.srcObject = null;
+
+      btnScan.disabled = true;
+      btnStop.disabled = true;
+      btnCopy.disabled = true;
+      btnSwitch.disabled = true;
+
+      updateDebug("stopped");
+    }
+
+    async function listDevices() {
+      // Après permission, les labels deviennent dispos
+      try {
+        devices = await navigator.mediaDevices.enumerateDevices();
+        devices = devices.filter(d => d.kind === "videoinput");
+        // Choix caméra arrière : souvent label contient back/rear/environment
+        const idxBack = devices.findIndex(d => /back|rear|environment/i.test(d.label));
+        currentDeviceIndex = idxBack >= 0 ? idxBack : (devices.length ? devices.length - 1 : -1);
+
+        btnSwitch.disabled = devices.length <= 1;
+      } catch(e) {
+        devices = [];
+        currentDeviceIndex = -1;
+      }
+    }
+
+    async function startCameraWithDevice(deviceId) {
+      clearError();
+
+      // Stop stream précédent
+      if (stream) stream.getTracks().forEach(t => t.stop());
+
+      // IMPORTANT iOS : playsinline + muted + play explicite
+      video.setAttribute("playsinline", "true");
+      video.muted = true;
+
+      const baseConstraints = {
+        audio: false,
+        video: deviceId
+          ? { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+          : { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }
+      };
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(baseConstraints);
+      } catch(e) {
+        // fallback sans contraintes (évite Overconstrained)
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio:false, video:true });
+        } catch(e2) {
+          showError(e2);
+          throw e2;
+        }
+      }
+
+      video.srcObject = stream;
+
+      await new Promise(resolve => {
+        video.onloadedmetadata = () => resolve();
+      });
+
+      await video.play();
+
+      await listDevices();
+      updateDebug("camera started");
+      btnScan.disabled = false;
+      btnStop.disabled = false;
+    }
+
+    async function startCamera() {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error("getUserMedia non disponible.");
+        }
+        await startCameraWithDevice(null);
+      } catch(e) {
+        showError(e);
+      }
+    }
+
+    async function switchCamera() {
+      if (!devices.length) return;
+      currentDeviceIndex = (currentDeviceIndex + 1) % devices.length;
+      const deviceId = devices[currentDeviceIndex]?.deviceId;
+      if (!deviceId) return;
+      try {
+        await startCameraWithDevice(deviceId);
+      } catch(e) {
+        showError(e);
+      }
+    }
+
+    function setResult(rawText) {
+      rawBox.textContent = "Texte brut : " + (rawText || "—");
+      const code = extract9Digits(rawText) || extract9Digits(manual.value) || "";
       if (!code) return;
 
-      lastCode = code;
       out.textContent = code;
       manual.value = code;
       btnCopy.disabled = false;
 
       if (navigator.vibrate) navigator.vibrate(80);
-
-      // Stop auto pour éviter double lecture
-      stop();
     }
 
-    async function start() {
-      if (active) return;
-      clearError();
-
-      // IMPORTANT iOS : doit être appelé suite à un clic
-      active = true;
-      btnStart.disabled = true;
-      btnStop.disabled = false;
-      btnCopy.disabled = true;
-      out.textContent = "…";
-      rawBox.textContent = "—";
-
-      try {
-        // Utilise decodeFromConstraints pour éviter facingMode "exact" (source de bugs)
-        const constraints = {
-          audio: false,
-          video: {
-            facingMode: { ideal: "environment" },
-            width:  { ideal: 1280 },
-            height: { ideal: 720 }
-          }
-        };
-
-        await reader.decodeFromConstraints(constraints, video, (result, err) => {
-          if (result) {
-            const txt = result.getText?.() ?? "";
-            setResult(txt);
-          }
-          // On ignore les erreurs "NotFoundException" (pas de code dans l'image) : normal
-        });
-
-        // Forcer play (iOS)
-        await video.play();
-      } catch (e) {
-        showError(e);
-
-        // Fallback sans contrainte environment
-        try {
-          const fallback = { audio: false, video: true };
-          await reader.decodeFromConstraints(fallback, video, (result, err) => {
-            if (result) setResult(result.getText?.() ?? "");
-          });
-          await video.play();
-        } catch (e2) {
-          showError(e2);
-          stop();
-        }
+    async function startScan() {
+      if (scanning) return;
+      if (!video.srcObject) {
+        showError(new Error("Démarre la caméra d’abord."));
+        return;
       }
-    }
 
-    function stop() {
-      if (!active) return;
-      active = false;
+      scanning = true;
+      clearError();
+      updateDebug("scanning…");
 
-      try { reader.reset(); } catch {}
-      btnStart.disabled = false;
-      btnStop.disabled = true;
+      // lecture continue sur le flux vidéo déjà affiché
+      reader.decodeFromVideoElementContinuously(video, (result, err) => {
+        if (result?.getText) {
+          const txt = result.getText();
+          setResult(txt);
+
+          // Stop dès qu'on a un code 9 chiffres
+          if (extract9Digits(txt)) {
+            try { reader.reset(); } catch {}
+            scanning = false;
+            updateDebug("scan ok (stopped)");
+          }
+        }
+        // NotFoundException = normal (pas de code dans l'image)
+      });
     }
 
     async function copy() {
@@ -231,31 +304,29 @@
       try {
         await navigator.clipboard.writeText(code);
         out.textContent = code + " ✅";
-      } catch (e) {
-        // Fallback : sélection
+      } catch {
         manual.focus();
         manual.select();
         out.textContent = code + " (sélectionné)";
       }
 
-      // Retour auto si return= fourni
       if (returnUrl) setTimeout(() => location.href = returnUrl, 250);
     }
 
-    btnStart.addEventListener("click", start);
-    btnStop.addEventListener("click", stop);
+    btnCam.addEventListener("click", startCamera);
+    btnSwitch.addEventListener("click", switchCamera);
+    btnScan.addEventListener("click", startScan);
+    btnStop.addEventListener("click", stopAll);
     btnCopy.addEventListener("click", copy);
 
     manual.addEventListener("input", () => {
       const c = extract9Digits(manual.value);
-      if (c) {
-        lastCode = c;
-        out.textContent = c;
-        btnCopy.disabled = false;
-      } else {
-        btnCopy.disabled = true;
-      }
+      btnCopy.disabled = !c;
+      if (c) out.textContent = c;
     });
+
+    // petit refresh debug
+    setInterval(() => updateDebug(), 1200);
   </script>
 </body>
 </html>
