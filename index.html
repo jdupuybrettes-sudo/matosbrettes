@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Scan Hilti → 9 chiffres</title>
+  <style>
+    :root{--bg:#0b0f17;--card:#111a2b;--line:#1c2333;--txt:#e9eef7;--muted:#9fb0c8;--btn:#2d6cdf;--btn2:#22304a;--ok:#7CFF9E;--warn:#ffd27c;--err:#ff7a7a;}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--txt);}
+    header{padding:14px 16px;border-bottom:1px solid var(--line);}
+    h1{margin:0;font-size:16px;opacity:.95;}
+    main{padding:16px;display:grid;gap:12px;max-width:720px;margin:0 auto;}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;}
+    .hint{color:var(--muted);font-size:13px;line-height:1.35;}
+    .ok{color:var(--ok);font-weight:800;}
+    .warn{color:var(--warn);font-weight:800;}
+    .err{color:var(--err);font-weight:800;white-space:pre-wrap;}
+    video{width:100%;border-radius:12px;background:#000;aspect-ratio:3/4;object-fit:cover;}
+    .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;}
+    button,a.btn{appearance:none;border:0;border-radius:12px;padding:12px 14px;background:var(--btn);color:#fff;font-weight:900;text-decoration:none;display:inline-flex;align-items:center;gap:8px;cursor:pointer;}
+    button.secondary,a.btn.secondary{background:var(--btn2);color:var(--txt);}
+    button:disabled{opacity:.55;cursor:not-allowed;}
+    .result{font-size:28px;letter-spacing:1px;font-weight:900;margin-top:6px;}
+    input{width:100%;padding:10px 12px;border-radius:10px;border:1px solid #2a3550;background:var(--bg);color:var(--txt);font-size:16px;}
+    details{margin-top:10px;}
+    summary{cursor:pointer;color:var(--muted);}
+    pre{background:#0a0d13;border:1px solid #1f2a40;padding:10px;border-radius:10px;overflow:auto;}
+  </style>
+</head>
+<body>
+<header><h1>Scanner Hilti → extrait uniquement les 9 chiffres</h1></header>
+
+<main>
+  <div class="card">
+    <div class="hint">
+      1) Clique <b>Démarrer caméra</b><br/>
+      2) Clique <b>Scanner</b> (lit le flux déjà affiché)<br/>
+      3) On extrait le <span class="ok">premier bloc de 9 chiffres</span> → <b>Copier</b><br/>
+      <span class="warn">Important :</span> si tu vois une erreur, elle s’affiche ci-dessous.
+    </div>
+    <div id="error" class="err" style="margin-top:10px;"></div>
+  </div>
+
+  <div class="card">
+    <video id="video" playsinline muted></video>
+
+    <div class="row">
+      <button id="btnCam">Démarrer caméra</button>
+      <button id="btnScan" class="secondary" disabled>Scanner</button>
+      <button id="btnStop" class="secondary" disabled>Stop</button>
+      <button id="btnCopy" class="secondary" disabled>Copier</button>
+      <a id="back" class="btn secondary" href="#">Retour</a>
+    </div>
+
+    <details>
+      <summary>Debug</summary>
+      <pre id="dbg">Chargement JS…</pre>
+      <pre id="raw">Texte brut : —</pre>
+    </details>
+  </div>
+
+  <div class="card">
+    <div class="hint">Résultat (9 chiffres) :</div>
+    <div id="out" class="result">—</div>
+    <div class="hint" style="margin-top:10px;">Ou colle/édite ici :</div>
+    <input id="manual" placeholder="454844738" inputmode="numeric" autocomplete="off" />
+  </div>
+</main>
+
+<!-- ZXing version "global" (pas module) -->
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.2/umd/index.min.js"></script>
+
+<script>
+  const video   = document.getElementById("video");
+  const out     = document.getElementById("out");
+  const rawBox  = document.getElementById("raw");
+  const dbgBox  = document.getElementById("dbg");
+  const manual  = document.getElementById("manual");
+  const errBox  = document.getElementById("error");
+
+  const btnCam  = document.getElementById("btnCam");
+  const btnScan = document.getElementById("btnScan");
+  const btnStop = document.getElementById("btnStop");
+  const btnCopy = document.getElementById("btnCopy");
+  const btnBack = document.getElementById("back");
+
+  // Affiche toutes les erreurs JS à l’écran
+  window.addEventListener("error", (e) => {
+    errBox.textContent = "JS Error: " + (e.message || e.error || e);
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    errBox.textContent = "Promise Rejection: " + (e.reason?.message || e.reason || e);
+  });
+
+  const params = new URLSearchParams(location.search);
+  const returnUrl = params.get("return") || "";
+  btnBack.href = returnUrl || "javascript:history.back()";
+
+  let stream = null;
+  let scanning = false;
+  const reader = new ZXing.BrowserMultiFormatReader();
+
+  function extract9Digits(text) {
+    if (!text) return "";
+    const m1 = String(text).match(/\d{9}/);
+    if (m1 && m1[0]) return m1[0];
+
+    const m2 = String(text).match(/\d[\d\s-]{7,}\d/g);
+    if (m2 && m2.length) {
+      for (const chunk of m2) {
+        const digits = chunk.replace(/[^\d]/g, "");
+        if (digits.length === 9) return digits;
+        if (digits.length > 9) return digits.slice(0, 9);
+      }
+    }
+    const all = String(text).replace(/\D/g, "");
+    if (all.length === 9) return all;
+    if (all.length > 9) return all.slice(0, 9);
+    return "";
+  }
+
+  function updateDebug(extra="") {
+    const s = stream?.getVideoTracks?.()?.[0]?.getSettings?.() || {};
+    dbgBox.textContent =
+      `ZXing loaded: ${!!window.ZXing}\n` +
+      `video.readyState=${video.readyState}\n` +
+      `videoWidth=${video.videoWidth} videoHeight=${video.videoHeight}\n` +
+      `trackSettings=${JSON.stringify(s, null, 2)}\n` +
+      (extra ? `\n${extra}` : "");
+  }
+
+  async function startCamera() {
+    errBox.textContent = "";
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error("getUserMedia non disponible.");
+
+      // Stop ancien flux
+      if (stream) stream.getTracks().forEach(t => t.stop());
+
+      // iOS: important
+      video.setAttribute("playsinline", "true");
+      video.muted = true;
+
+      // contraintes “souples”
+      const constraints = {
+        audio: false,
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }
+      };
+
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject = stream;
+
+      await new Promise(r => video.onloadedmetadata = r);
+      await video.play();
+
+      btnScan.disabled = false;
+      btnStop.disabled = false;
+      updateDebug("camera started");
+    } catch (e) {
+      errBox.textContent = (e.name || "Error") + ": " + (e.message || e);
+      updateDebug("camera failed");
+    }
+  }
+
+  function stopAll() {
+    try { reader.reset(); } catch {}
+    scanning = false;
+
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
+    video.srcObject = null;
+    btnScan.disabled = true;
+    btnStop.disabled = true;
+    btnCopy.disabled = true;
+    updateDebug("stopped");
+  }
+
+  function setResult(rawText) {
+    rawBox.textContent = "Texte brut : " + (rawText || "—");
+    const code = extract9Digits(rawText) || extract9Digits(manual.value) || "";
+    if (!code) return;
+    out.textContent = code;
+    manual.value = code;
+    btnCopy.disabled = false;
+    if (navigator.vibrate) navigator.vibrate(80);
+  }
+
+  function startScan() {
+    if (!video.srcObject) {
+      errBox.textContent = "Démarre la caméra d’abord.";
+      return;
+    }
+    if (scanning) return;
+    scanning = true;
+    errBox.textContent = "";
+    updateDebug("scanning…");
+
+    // lecture continue sur le flux vidéo existant
+    reader.decodeFromVideoElementContinuously(video, (result, err) => {
+      if (result?.getText) {
+        const txt = result.getText();
+        setResult(txt);
+
+        if (extract9Digits(txt)) {
+          try { reader.reset(); } catch {}
+          scanning = false;
+          updateDebug("scan ok (stopped)");
+        }
+      }
+      // NotFoundException = normal (aucun code détecté sur une frame)
+    });
+  }
+
+  async function copyCode() {
+    const code = (manual.value || "").trim();
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText(code);
+      out.textContent = code + " ✅";
+    } catch {
+      manual.focus(); manual.select();
+      out.textContent = code + " (sélectionné)";
+    }
+    if (returnUrl) setTimeout(() => location.href = returnUrl, 250);
+  }
+
+  btnCam.addEventListener("click", startCamera);
+  btnScan.addEventListener("click", startScan);
+  btnStop.addEventListener("click", stopAll);
+  btnCopy.addEventListener("click", copyCode);
+
+  manual.addEventListener("input", () => {
+    const c = extract9Digits(manual.value);
+    btnCopy.disabled = !c;
+    if (c) out.textContent = c;
+  });
+
+  // debug vivant même si caméra pas lancée
+  setInterval(() => updateDebug(), 1200);
+  updateDebug("page loaded");
+</script>
+</body>
+</html>
