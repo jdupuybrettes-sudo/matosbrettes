@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Scanner Matos BRETTES</title>
+  <style>
+    :root{--bg:#0b1220;--card:#0f172a;--text:#e5e7eb;--muted:#94a3b8;--accent:#60a5fa;}
+    *{box-sizing:border-box;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial}
+    body{margin:0;background:linear-gradient(180deg,#050814,#0b1220);color:var(--text);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;}
+    .wrap{width:min(560px,100%);display:flex;flex-direction:column;gap:12px;}
+    .card{background:rgba(15,23,42,.86);border:1px solid rgba(148,163,184,.15);border-radius:22px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.35);}
+    .top{padding:14px 16px;border-bottom:1px solid rgba(148,163,184,.12);display:flex;gap:10px;align-items:center;justify-content:space-between;}
+    .title{font-weight:800;letter-spacing:.04em;text-transform:uppercase;font-size:12px;color:var(--muted)}
+    .status{font-size:12px;color:var(--muted);text-align:right;max-width:70%}
+    .videoBox{position:relative;aspect-ratio:1/1;background:#000;}
+    video{width:100%;height:100%;object-fit:cover;display:block;}
+    .reticle{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;}
+    .frame{width:70%;height:44%;border:2px solid rgba(255,255,255,.18);border-radius:18px;background:rgba(0,0,0,.05);position:relative}
+    .c{position:absolute;width:18px;height:18px;border:4px solid var(--accent);}
+    .tl{top:-2px;left:-2px;border-right:none;border-bottom:none;border-top-left-radius:14px;}
+    .tr{top:-2px;right:-2px;border-left:none;border-bottom:none;border-top-right-radius:14px;}
+    .bl{bottom:-2px;left:-2px;border-right:none;border-top:none;border-bottom-left-radius:14px;}
+    .br{bottom:-2px;right:-2px;border-left:none;border-top:none;border-bottom-right-radius:14px;}
+    .overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;background:rgba(2,6,23,.78);backdrop-filter:blur(7px);padding:18px;text-align:center;}
+    .overlay.hide{display:none;}
+    .pill{padding:10px 12px;border-radius:999px;background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.25);color:#bfdbfe;font-size:12px;}
+    .small{font-size:12px;color:var(--muted);line-height:1.35;}
+    button{border:0;border-radius:16px;padding:14px 14px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;font-size:11px;cursor:pointer;}
+    .btn{background:#fff;color:#0b1220;}
+    .btn2{background:rgba(255,255,255,.10);color:#fff;border:1px solid rgba(255,255,255,.15);}
+    .row{display:flex;gap:10px;flex-wrap:wrap;padding:12px;}
+    .row button{flex:1 1 140px;}
+    .manual{padding:12px;border-top:1px solid rgba(148,163,184,.12);display:flex;gap:10px;align-items:center;}
+    input{flex:1;border-radius:14px;border:1px solid rgba(148,163,184,.18);background:rgba(2,6,23,.35);color:#fff;padding:12px 12px;font-size:14px;outline:none;}
+    input:focus{border-color:rgba(96,165,250,.6)}
+    .hint{padding:12px 14px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="top">
+        <div class="title">Scanner Matos BRETTES</div>
+        <div class="status" id="status">Préparation…</div>
+      </div>
+
+      <div class="videoBox" id="box">
+        <video id="video" playsinline muted></video>
+        <div class="reticle">
+          <div class="frame">
+            <div class="c tl"></div><div class="c tr"></div><div class="c bl"></div><div class="c br"></div>
+          </div>
+        </div>
+
+        <div class="overlay" id="overlay">
+          <div class="pill">Tape pour démarrer</div>
+          <div class="small">
+            iPhone demande souvent un tap sur la page pour autoriser la caméra.<br/>
+            Astuce reflets : étiquette à l’ombre + inclinaison 5–15°.
+          </div>
+          <button class="btn" id="btnStart">Démarrer</button>
+          <button class="btn2" id="btnOpenSafari" style="margin-top:6px;">Ouvrir dans Safari</button>
+        </div>
+      </div>
+
+      <div class="row">
+        <button class="btn2" id="btnTorch" disabled>Lampe</button>
+        <button class="btn2" id="btnZoomOut" disabled>Zoom -</button>
+        <button class="btn2" id="btnZoomIn" disabled>Zoom +</button>
+      </div>
+
+      <div class="manual">
+        <input id="manual" inputmode="numeric" placeholder="Saisie manuelle (9 chiffres)" />
+        <button class="btn" id="btnGo">OK</button>
+      </div>
+
+      <div class="hint small">
+        Retour Glide : <span id="returnInfo"></span>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { BrowserMultiFormatReader } from "https://esm.run/@zxing/browser";
+    import { DecodeHintType, BarcodeFormat } from "https://esm.run/@zxing/library";
+
+    const video = document.getElementById("video");
+    const statusEl = document.getElementById("status");
+    const overlay = document.getElementById("overlay");
+    const btnStart = document.getElementById("btnStart");
+    const box = document.getElementById("box");
+
+    const btnTorch = document.getElementById("btnTorch");
+    const btnZoomIn = document.getElementById("btnZoomIn");
+    const btnZoomOut = document.getElementById("btnZoomOut");
+
+    const manual = document.getElementById("manual");
+    const btnGo = document.getElementById("btnGo");
+    const returnInfo = document.getElementById("returnInfo");
+    const btnOpenSafari = document.getElementById("btnOpenSafari");
+
+    const qs = new URLSearchParams(window.location.search);
+    const rawReturn = qs.get("return");
+    const returnUrl = rawReturn ? decodeURIComponent(rawReturn) : null;
+    returnInfo.textContent = returnUrl ? returnUrl : "(aucun return — mode test)";
+
+    function setStatus(t){ statusEl.textContent = t; }
+
+    function normalizeCode(raw){
+      const s = (raw || "").trim();
+      const m = s.match(/\d{9}/);
+      return m ? m[0] : s;
+    }
+
+    let stream = null;
+    let track = null;
+    let reader = null;
+    let scanning = false;
+    let torchOn = false;
+    let zoomMin = 1, zoomMax = 1, zoom = 1;
+
+    function stopAll(){
+      scanning = false;
+      try { reader?.reset(); } catch {}
+      reader = null;
+
+      if (track) { try { track.stop(); } catch {} }
+      track = null;
+
+      if (stream) { try { stream.getTracks().forEach(t=>t.stop()); } catch {} }
+      stream = null;
+
+      try { video.srcObject = null; } catch {}
+    }
+
+    function redirectToGlide(code){
+      const finalCode = normalizeCode(code);
+      if (!finalCode) return;
+      stopAll();
+
+      if (returnUrl){
+        const sep = returnUrl.includes("?") ? "&" : "?";
+        window.location.assign(`${returnUrl}${sep}code=${encodeURIComponent(finalCode)}`);
+      } else {
+        setStatus(`Lu: ${finalCode} (pas de return)`);
+        alert("Lu : " + finalCode);
+      }
+    }
+
+    async function attachStreamToVideo(s){
+      video.srcObject = s;
+
+      // iOS : indispensable
+      video.setAttribute("playsinline", "true");
+      video.setAttribute("webkit-playsinline", "true");
+      video.muted = true;
+      video.autoplay = true;
+
+      // attendre metadata avant play (sinon videoWidth=0)
+      await new Promise((resolve) => {
+        if (video.readyState >= 1) return resolve();
+        video.onloadedmetadata = () => resolve();
+      });
+
+      await video.play();
+    }
+
+    async function applyTorch(on){
+      if (!track) return;
+      try{
+        await track.applyConstraints({ advanced: [{ torch: !!on }] });
+        torchOn = !!on;
+        btnTorch.textContent = torchOn ? "Lampe ON" : "Lampe";
+      }catch{}
+    }
+
+    async function applyZoom(z){
+      if (!track) return;
+      const clamped = Math.max(zoomMin, Math.min(zoomMax, z));
+      try{
+        await track.applyConstraints({ advanced: [{ zoom: clamped }] });
+        zoom = clamped;
+      }catch{}
+    }
+
+    async function startCameraAndScan(){
+      if (scanning) return;
+
+      setStatus("Demande caméra…");
+      try{
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            frameRate: { ideal: 30, max: 60 }
+          },
+          audio:false
+        });
+
+        await attachStreamToVideo(stream);
+
+        track = stream.getVideoTracks()[0];
+        const caps = track.getCapabilities?.() || {};
+
+        // Torch/zoom
+        btnTorch.disabled = !caps.torch;
+        btnTorch.textContent = "Lampe";
+        torchOn = false;
+
+        if (caps.zoom?.min != null && caps.zoom?.max != null){
+          zoomMin = caps.zoom.min;
+          zoomMax = caps.zoom.max;
+          zoom = zoomMin;
+          btnZoomIn.disabled = false;
+          btnZoomOut.disabled = false;
+          await applyZoom(Math.min(zoomMin + 0.8, zoomMax));
+        } else {
+          btnZoomIn.disabled = true;
+          btnZoomOut.disabled = true;
+        }
+
+        overlay.classList.add("hide");
+
+        // ZXing (try harder)
+        const hints = new Map();
+        hints.set(DecodeHintType.TRY_HARDER, true);
+        hints.set(DecodeHintType.ALSO_INVERTED, true);
+        hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+          BarcodeFormat.DATA_MATRIX,
+          BarcodeFormat.QR_CODE,
+          BarcodeFormat.CODE_128,
+          BarcodeFormat.CODE_39,
+          BarcodeFormat.EAN_13,
+          BarcodeFormat.EAN_8,
+        ]);
+
+        reader = new BrowserMultiFormatReader(hints, 300);
+        scanning = true;
+
+        setStatus("Scan en cours…");
+        await reader.decodeFromVideoDevice(null, video, (result, err) => {
+          if (result?.getText) redirectToGlide(result.getText());
+        });
+
+      } catch(e){
+        scanning = false;
+        stopAll();
+        setStatus("Caméra bloquée : autorise l’accès puis retente.");
+        overlay.classList.remove("hide");
+      }
+    }
+
+    // 1) tentative autostart
+    startCameraAndScan();
+
+    // 2) fallback iOS : 1 tap n’importe où
+    box.addEventListener("click", () => startCameraAndScan(), { once:true });
+    btnStart.addEventListener("click", startCameraAndScan);
+
+    btnTorch.addEventListener("click", () => applyTorch(!torchOn));
+    btnZoomIn.addEventListener("click", () => applyZoom(zoom + 0.6));
+    btnZoomOut.addEventListener("click", () => applyZoom(zoom - 0.6));
+
+    btnGo.addEventListener("click", () => {
+      const v = manual.value || "";
+      if (!v.trim()) return;
+      redirectToGlide(v);
+    });
+    manual.addEventListener("keydown", (e)=>{ if(e.key==="Enter") btnGo.click(); });
+
+    // Bouton "ouvrir Safari" (si la webview Glide bloque)
+    btnOpenSafari.addEventListener("click", () => {
+      // ouvre un nouvel onglet si possible (souvent Safari)
+      window.open(window.location.href, "_blank");
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) stopAll();
+    });
+  </script>
+</body>
+</html>
